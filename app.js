@@ -1,14 +1,19 @@
 (function () {
-  // El token vive en sessionStorage a propósito: sobrevive a un refresh de
-  // la misma pestaña, pero desaparece al cerrar la pestaña/app. Eso es lo
-  // que hace que "al volver a entrar" siempre pida contraseña de nuevo.
   const SESSION_KEY = 'nodo_session';
   const POLL_INTERVAL_MS = 2500;
+  const POLL_MAX_BACKOFF_MS = 12000;
+  const TYPING_SEND_THROTTLE_MS = 2000;
+  const TYPING_STOP_AFTER_MS = 3000;
 
   let currentUser = null;
   let currentToken = null;
   let pollTimer = null;
+  let pollBackoff = POLL_INTERVAL_MS;
+  let consecutiveFailures = 0;
   let lastMessageId = 0;
+  let messagesById = new Map();
+  let lastTypingSentAt = 0;
+  let typingStopTimer = null;
 
   const authScreen = document.getElementById('authScreen');
   const chatScreen = document.getElementById('chatScreen');
@@ -20,6 +25,7 @@
   const usernameInput = document.getElementById('username');
   const passwordInput = document.getElementById('password');
   const thread = document.getElementById('thread');
+  const typingIndicator = document.getElementById('typingIndicator');
   const messageInput = document.getElementById('messageInput');
   const sendBtn = document.getElementById('sendBtn');
   const logoutBtn = document.getElementById('logoutBtn');
@@ -29,8 +35,7 @@
 
   // Nombre aleatorio en el campo de contraseña en cada carga: dificulta que
   // un gestor de contraseñas lo reconozca como un login para ofrecer
-  // guardarlo. No es garantía al 100% (Chrome/Firefox ignoran
-  // autocomplete="off" a propósito), pero ayuda bastante en la práctica.
+  // guardarlo.
   const randomSuffix = Math.random().toString(36).slice(2, 10);
   passwordInput.name = 'f_' + randomSuffix;
   usernameInput.name = 'u_' + randomSuffix;
@@ -62,10 +67,7 @@
   }
 
   function authHeaders(extra) {
-    return Object.assign(
-      { 'x-username': currentUser, 'x-session-token': currentToken },
-      extra || {}
-    );
+    return Object.assign({ 'x-username': currentUser, 'x-session-token': currentToken }, extra || {});
   }
 
   // ---------- login ----------
@@ -113,14 +115,21 @@
     sendBtn.disabled = false;
 
     lastMessageId = 0;
+    messagesById = new Map();
     thread.innerHTML = '<div class="empty-state">— cargando —</div>';
+    pollBackoff = POLL_INTERVAL_MS;
+    consecutiveFailures = 0;
     await pollMessages(true);
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(() => pollMessages(false), POLL_INTERVAL_MS);
+    schedulePoll();
     setupPush();
   }
 
-  // ---------- sondeo: trae mensajes nuevos Y detecta si nos expulsaron ----------
+  function schedulePoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(() => pollMessages(false).then(schedulePoll), pollBackoff);
+  }
+
+  // ---------- sondeo: mensajes + presencia, y detecta si nos expulsaron ----------
   async function pollMessages(isInitial) {
     try {
       const res = await fetch('/api/messages', { headers: authHeaders() });
@@ -131,55 +140,214 @@
         return;
       }
       if (!res.ok) {
-        linkDot.classList.add('off');
-        linkbarStatus.textContent = 'sin conexión…';
+        handlePollFailure();
         return;
       }
-      linkDot.classList.remove('off');
-      linkbarStatus.textContent = 'conectado';
-
-      const list = await res.json();
-      if (isInitial) {
-        renderMessages(list);
-        lastMessageId = list.length ? list[list.length - 1].id : 0;
-      } else {
-        const newer = list.filter((m) => m.id > lastMessageId);
-        newer.forEach(appendMessage);
-        if (newer.length) lastMessageId = newer[newer.length - 1].id;
+      const payload = await res.json();
+      if (!payload || !Array.isArray(payload.messages)) {
+        handlePollFailure();
+        return;
       }
+
+      consecutiveFailures = 0;
+      pollBackoff = POLL_INTERVAL_MS;
+      linkDot.classList.remove('off');
+      hideConnErrorBanner();
+
+      applyMessages(payload.messages, isInitial);
+      applyPresence(payload.presence);
+      maybeMarkRead(payload.messages);
     } catch (err) {
-      linkDot.classList.add('off');
-      linkbarStatus.textContent = 'sin conexión…';
+      handlePollFailure();
     }
   }
 
-  function renderMessages(list) {
+  function handlePollFailure() {
+    consecutiveFailures += 1;
+    linkDot.classList.add('off');
+    pollBackoff = Math.min(pollBackoff * 1.6, POLL_MAX_BACKOFF_MS);
+    if (consecutiveFailures >= 3) {
+      showConnErrorBanner();
+    }
+  }
+
+  function showConnErrorBanner() {
+    let banner = document.getElementById('connErrorBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'connErrorBanner';
+      banner.className = 'msg-inline error';
+      banner.style.margin = '10px 16px 0';
+      banner.textContent = 'No se pudo conectar con el servidor. Reintentando…';
+      chatScreen.insertBefore(banner, thread);
+    }
+  }
+  function hideConnErrorBanner() {
+    const banner = document.getElementById('connErrorBanner');
+    if (banner) banner.remove();
+  }
+
+  // ---------- presencia (en línea / última vez / escribiendo) ----------
+  function applyPresence(presence) {
+    if (!presence) {
+      linkbarStatus.textContent = 'conectado';
+      typingIndicator.style.display = 'none';
+      return;
+    }
+    if (presence.typing) {
+      typingIndicator.style.display = 'block';
+    } else {
+      typingIndicator.style.display = 'none';
+    }
+    if (presence.online) {
+      linkbarStatus.innerHTML = '@' + escapeHtml(presence.username) + ' <span class="presence-online">en línea</span>';
+    } else if (presence.lastSeen) {
+      const d = new Date(presence.lastSeen);
+      const today = new Date();
+      const sameDay = d.toDateString() === today.toDateString();
+      const label = sameDay
+        ? d.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' })
+        : d.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit' }) +
+          ' ' +
+          d.toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+      linkbarStatus.innerHTML =
+        '@' + escapeHtml(presence.username) + ' <span class="presence-offline">últ. vez ' + label + '</span>';
+    } else {
+      linkbarStatus.textContent = '@' + presence.username + ' sin conectarse todavía';
+    }
+  }
+
+  // ---------- leído: si la pestaña está enfocada, marca lo que llegó como leído ----------
+  function maybeMarkRead(list) {
+    if (!document.hasFocus()) return;
+    const fromOther = list.filter((m) => m.from !== currentUser && !m.readAt);
+    if (fromOther.length === 0) return;
+    const upToId = Math.max(...fromOther.map((m) => m.id));
+    fetch('/api/read', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ upToId }),
+    }).catch(() => {});
+  }
+
+  // ---------- render de mensajes ----------
+  function applyMessages(list, isInitial) {
+    let changed = false;
+    for (const m of list) {
+      const prev = messagesById.get(m.id);
+      if (!prev || prev.text !== m.text || prev.editedAt !== m.editedAt || prev.deliveredAt !== m.deliveredAt || prev.readAt !== m.readAt) {
+        messagesById.set(m.id, m);
+        changed = true;
+      }
+      if (m.id > lastMessageId) lastMessageId = m.id;
+    }
+    if (isInitial || changed) {
+      renderAll();
+    }
+  }
+
+  function renderAll() {
+    const list = Array.from(messagesById.values()).sort((a, b) => a.id - b.id);
     if (list.length === 0) {
       thread.innerHTML = '<div class="empty-state">— sin mensajes todavía —</div>';
       return;
     }
+    const wasNearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60;
     thread.innerHTML = list.map(messageHtml).join('');
-    thread.scrollTop = thread.scrollHeight;
+    attachMessageHandlers();
+    if (wasNearBottom) thread.scrollTop = thread.scrollHeight;
+  }
+
+  function ticksHtml(m) {
+    if (m.from !== currentUser) return '';
+    let cls = 'sent';
+    let icon = '✓';
+    if (m.readAt) {
+      cls = 'read';
+      icon = '✓✓';
+    } else if (m.deliveredAt) {
+      cls = 'delivered';
+      icon = '✓✓';
+    }
+    return '<span class="ticks ' + cls + '">' + icon + '</span>';
   }
 
   function messageHtml(m) {
     const mine = m.from === currentUser;
     const time = new Date(m.ts).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
     return (
-      '<div class="packet ' + (mine ? 'mine' : '') + '">' +
+      '<div class="packet ' + (mine ? 'mine' : '') + '" data-id="' + m.id + '">' +
       '<div class="packet-head"><span class="uid">@' + escapeHtml(m.from) + '</span><span>' + time + '</span></div>' +
-      '<div class="packet-body">' + escapeHtml(m.text) + '</div>' +
+      '<div class="packet-body' + (mine ? ' editable' : '') + '" data-id="' + m.id + '">' + escapeHtml(m.text) + '</div>' +
+      '<div class="packet-meta">' +
+      (m.editedAt ? '<span class="edited-tag">editado</span>' : '') +
+      ticksHtml(m) +
+      '</div>' +
       '</div>'
     );
   }
 
-  function appendMessage(m) {
-    const empty = thread.querySelector('.empty-state');
-    if (empty) empty.remove();
-    const div = document.createElement('div');
-    div.innerHTML = messageHtml(m);
-    thread.appendChild(div.firstElementChild);
-    thread.scrollTop = thread.scrollHeight;
+  function attachMessageHandlers() {
+    thread.querySelectorAll('.packet-body.editable').forEach((el) => {
+      el.addEventListener('click', () => startEdit(Number(el.dataset.id)));
+    });
+  }
+
+  // ---------- editar mensaje propio ----------
+  function startEdit(id) {
+    if (thread.querySelector('.edit-box')) return; // ya hay una edición en curso
+    const m = messagesById.get(id);
+    if (!m || m.from !== currentUser) return;
+    const packet = thread.querySelector('.packet[data-id="' + id + '"] .packet-body');
+    if (!packet) return;
+
+    const original = m.text;
+    packet.innerHTML =
+      '<div class="edit-box">' +
+      '<input type="text" value="' + escapeHtml(original) + '" maxlength="4000">' +
+      '<button class="save-btn">Guardar</button>' +
+      '<button class="cancel-btn">Cancelar</button>' +
+      '</div>';
+    const input = packet.querySelector('input');
+    const saveBtn = packet.querySelector('.save-btn');
+    const cancelBtn = packet.querySelector('.cancel-btn');
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+
+    function cancel() {
+      renderAll();
+    }
+    saveBtn.addEventListener('click', () => submitEdit(id, input.value));
+    cancelBtn.addEventListener('click', cancel);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitEdit(id, input.value);
+      if (e.key === 'Escape') cancel();
+    });
+  }
+
+  async function submitEdit(id, newText) {
+    const clean = newText.trim();
+    if (!clean) return;
+    try {
+      const res = await fetch('/api/messages', {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ id, text: clean }),
+      });
+      if (res.status === 401) {
+        forceLogout('Se inició sesión con este usuario desde otro dispositivo, o tu sesión expiró.');
+        return;
+      }
+      if (!res.ok) {
+        renderAll();
+        return;
+      }
+      const updated = await res.json();
+      messagesById.set(updated.id, updated);
+      renderAll();
+    } catch (err) {
+      renderAll();
+    }
   }
 
   // ---------- enviar ----------
@@ -187,6 +355,7 @@
     const text = messageInput.value.trim();
     if (!text) return;
     messageInput.value = '';
+    sendTyping(false);
     sendBtn.disabled = true;
     try {
       const res = await fetch('/api/messages', {
@@ -199,10 +368,9 @@
         return;
       }
       const msg = await res.json();
-      if (msg.id > lastMessageId) {
-        appendMessage(msg);
-        lastMessageId = msg.id;
-      }
+      messagesById.set(msg.id, msg);
+      if (msg.id > lastMessageId) lastMessageId = msg.id;
+      renderAll();
     } catch (err) {
       messageInput.placeholder = 'No se pudo enviar. Intenta de nuevo.';
     }
@@ -213,10 +381,29 @@
     if (e.key === 'Enter') sendMessage();
   });
 
+  // ---------- "escribiendo…" ----------
+  function sendTyping(isTyping) {
+    if (!currentUser) return;
+    fetch('/api/typing', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ typing: isTyping }),
+    }).catch(() => {});
+  }
+  messageInput.addEventListener('input', () => {
+    const now = Date.now();
+    if (now - lastTypingSentAt > TYPING_SEND_THROTTLE_MS) {
+      lastTypingSentAt = now;
+      sendTyping(true);
+    }
+    if (typingStopTimer) clearTimeout(typingStopTimer);
+    typingStopTimer = setTimeout(() => sendTyping(false), TYPING_STOP_AFTER_MS);
+  });
+
   // ---------- cierre de sesión forzado (expulsado) ----------
   function forceLogout(reason) {
     clearSession();
-    if (pollTimer) clearInterval(pollTimer);
+    if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
     currentUser = null;
     currentToken = null;
@@ -227,6 +414,7 @@
     authScreen.style.display = 'block';
     usernameInput.value = '';
     passwordInput.value = '';
+    hideConnErrorBanner();
     kickedText.textContent = reason;
     kickedOverlay.classList.add('show');
   }
@@ -234,6 +422,7 @@
 
   // ---------- cierre de sesión manual ----------
   logoutBtn.addEventListener('click', async () => {
+    sendTyping(false);
     try {
       await fetch('/api/logout', {
         method: 'POST',
@@ -242,7 +431,7 @@
       });
     } catch (err) {}
     clearSession();
-    if (pollTimer) clearInterval(pollTimer);
+    if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
     currentUser = null;
     currentToken = null;
@@ -253,6 +442,7 @@
     authScreen.style.display = 'block';
     usernameInput.value = '';
     passwordInput.value = '';
+    hideConnErrorBanner();
     clearMsg();
   });
 
@@ -263,7 +453,7 @@
       const reg = await navigator.serviceWorker.register('/sw.js');
       const keyRes = await fetch('/api/push-key');
       const { key } = await keyRes.json();
-      if (!key) return; // servidor sin VAPID configurado todavía
+      if (!key) return;
 
       let permission = Notification.permission;
       if (permission === 'default') {
@@ -298,6 +488,11 @@
     }
     return outputArray;
   }
+
+  // marcar leído también cuando la pestaña recupera el foco, sin esperar al próximo sondeo
+  window.addEventListener('focus', () => {
+    if (currentUser) maybeMarkRead(Array.from(messagesById.values()));
+  });
 
   // ---------- restaurar sesión si la pestaña se refrescó (no si se cerró) ----------
   const existing = loadSession();

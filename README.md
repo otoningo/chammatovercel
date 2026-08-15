@@ -107,3 +107,76 @@ distintos:
 - **Nunca expongas la `SUPABASE_SERVICE_ROLE_KEY`** fuera de las variables
   de entorno de Vercel — con esa clave se puede leer y escribir cualquier
   tabla sin restricción.
+
+## 7. Actualización: presencia, escribiendo, entregado/leído, edición
+
+Si ya tenías el proyecto desplegado desde antes, hay un paso extra antes de
+subir este código nuevo:
+
+1. En Supabase, **SQL Editor > New query**, pega el contenido de
+   `sql/migration_2_presence.sql` y dale **Run**. Agrega las columnas que
+   faltan sin tocar tus datos existentes.
+2. Sube el código de esta carpeta (reemplaza todos los archivos) y
+   redespliega en Vercel como siempre.
+
+Lo que se agregó:
+
+- **Doble check**: un check gris cuando se envió, doble check gris cuando
+  el otro dispositivo lo recibió (hizo polling), doble check en color de
+  acento cuando la otra persona lo tuvo en pantalla con la pestaña
+  enfocada.
+- **En línea / última vez**: en la barra de arriba, junto al nombre del
+  otro usuario. "En línea" se calcula porque su app hizo un sondeo hace
+  menos de 8 segundos; si no, muestra la hora (o fecha) de la última vez
+  que sí lo hizo.
+- **Escribiendo…**: aparece debajo del chat cuando el otro usuario ha
+  tecleado en los últimos segundos.
+- **Editar mensajes**: click sobre uno de tus propios mensajes para
+  editarlo. Solo puedes editar los tuyos — el servidor lo verifica, no es
+  solo cosmético. Queda marcado como "editado".
+- **Manejo de fallas más robusto**: si el sondeo falla varias veces
+  seguidas (por ejemplo si Supabase está caído un momento, o hay un
+  problema de red), ahora aparece un aviso visible de "no se pudo
+  conectar, reintentando…" en vez de quedarse congelado en silencio como
+  antes — que es lo que probablemente pasó cuando dejaron de verse
+  mensajes nuevos.
+
+### Sobre el bug de "los mensajes dejaron de aparecer"
+
+No tengo forma de ver tu proyecto en vivo para confirmar la causa exacta,
+pero las dos explicaciones más probables son:
+
+1. **Un fallo de red o de Supabase se quedaba silencioso.** El código
+   anterior, si el `fetch` fallaba, simplemente no actualizaba nada y no
+   avisaba — parecía que la app estaba "colgada" aunque en realidad seguía
+   viva. Ya quedó resuelto con el aviso visible y los reintentos con
+   espera creciente.
+2. **El proyecto de Supabase se pausó por inactividad.** El plan gratis
+   pausa la base de datos tras 7 días sin ninguna petición — si pasó un
+   tiempo sin usar el chat, se pausa sola y tarda unos segundos en
+   reactivarse con la siguiente petición. Con uso normal casi nunca
+   debería pasar.
+
+Si vuelve a pasar con esta versión, ahora vas a ver el aviso en pantalla en
+vez de silencio total — eso ya es información útil para diagnosticarlo.
+
+## 8. Lo que NO se hizo en esta ronda
+
+De la lista que pediste, esto quedó fuera a propósito porque cada uno es un
+proyecto grande por separado:
+
+- **Notas de voz, imágenes y archivos.** Requiere subir/guardar archivos
+  binarios (Supabase Storage sirve para esto, es gratis hasta cierto
+  límite) y rehacer la burbuja de mensaje para mostrar audio/imagen en vez
+  de solo texto.
+- **Llamadas.** Esto es un cambio de arquitectura fuerte — necesita
+  WebRTC más un servidor de señalización, algo que Vercel serverless no
+  soporta de forma nativa (haría falta un servicio de terceros tipo
+  Daily.co o LiveKit, con su propio plan gratis limitado).
+- **Cifrado extremo a extremo.** Descartado por decisión tuya — con HTTPS
+  el tráfico ya va cifrado en tránsito, que es la protección real que
+  importa aquí.
+
+Si quieres seguir con alguno de estos, dímelo y lo armamos como el
+siguiente paso.
+

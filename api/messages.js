@@ -1,6 +1,7 @@
 const webPush = require('web-push');
 const { getServiceClient } = require('../lib/supabase');
 const { isValidSession, touchSession } = require('../lib/auth');
+const { getOtherUserPresence } = require('../lib/presence');
 
 function setupVapidIfConfigured() {
   if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
@@ -15,9 +16,20 @@ function setupVapidIfConfigured() {
 }
 
 // Si el destinatario hizo un sondeo (GET) hace menos de este tiempo,
-// asumimos que tiene el chat abierto y no le mandamos push — ya lo va a
-// ver solo. Si no, le mandamos la notificación del sistema.
+// asumimos que tiene el chat abierto y no le mandamos push.
 const ACTIVE_WINDOW_MS = 12000;
+
+function serializeMessage(m) {
+  return {
+    id: m.id,
+    from: m.from_user,
+    text: m.text,
+    ts: new Date(m.ts).getTime(),
+    editedAt: m.edited_at ? new Date(m.edited_at).getTime() : null,
+    deliveredAt: m.delivered_at ? new Date(m.delivered_at).getTime() : null,
+    readAt: m.read_at ? new Date(m.read_at).getTime() : null,
+  };
+}
 
 module.exports = async (req, res) => {
   const username = req.headers['x-username'];
@@ -32,13 +44,23 @@ module.exports = async (req, res) => {
 
   if (req.method === 'GET') {
     await touchSession(username);
-    const { data, error } = await supabase
+
+    // Marcar como "entregados" los mensajes del otro usuario que todavía no
+    // lo estaban: si estás pidiendo el historial, es porque tu app los
+    // recibió.
+    await supabase
       .from('messages')
-      .select('id, from_user, text, ts')
-      .order('id', { ascending: true })
-      .limit(200);
+      .update({ delivered_at: new Date().toISOString() })
+      .neq('from_user', username)
+      .is('delivered_at', null);
+
+    const [{ data, error }, presence] = await Promise.all([
+      supabase.from('messages').select('*').order('id', { ascending: true }).limit(300),
+      getOtherUserPresence(username),
+    ]);
     if (error) return res.status(500).json({ error: 'db_error' });
-    return res.json(data.map((m) => ({ id: m.id, from: m.from_user, text: m.text, ts: new Date(m.ts).getTime() })));
+
+    return res.json({ messages: data.map(serializeMessage), presence });
   }
 
   if (req.method === 'POST') {
@@ -48,9 +70,12 @@ module.exports = async (req, res) => {
     const { data: inserted, error } = await supabase
       .from('messages')
       .insert({ from_user: username, text })
-      .select('id, from_user, text, ts')
+      .select('*')
       .single();
     if (error) return res.status(500).json({ error: 'db_error' });
+
+    // Al mandar, ya dejamos de "escribiendo" del lado del remitente.
+    await supabase.from('sessions').update({ typing_at: null }).eq('username', username);
 
     // Empujar notificación push a quien no esté activo ahora mismo.
     // A propósito no va ni el remitente ni el texto en la notificación:
@@ -84,7 +109,32 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.json({ id: inserted.id, from: inserted.from_user, text: inserted.text, ts: new Date(inserted.ts).getTime() });
+    return res.json(serializeMessage(inserted));
+  }
+
+  if (req.method === 'PATCH') {
+    const { id, text } = req.body || {};
+    const clean = String(text || '').slice(0, 4000).trim();
+    if (!id || !clean) return res.status(400).json({ error: 'id y text requeridos' });
+
+    // Solo puedes editar tus propios mensajes.
+    const { data: existing, error: findErr } = await supabase
+      .from('messages')
+      .select('id, from_user')
+      .eq('id', id)
+      .maybeSingle();
+    if (findErr || !existing) return res.status(404).json({ error: 'not_found' });
+    if (existing.from_user !== username) return res.status(403).json({ error: 'forbidden' });
+
+    const { data: updated, error } = await supabase
+      .from('messages')
+      .update({ text: clean, edited_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('*')
+      .single();
+    if (error) return res.status(500).json({ error: 'db_error' });
+
+    return res.json(serializeMessage(updated));
   }
 
   return res.status(405).json({ error: 'method_not_allowed' });
