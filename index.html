@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Nodo — mensajería</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#0B1220">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="app" id="app">
+  <div class="linkbar" id="linkbar" style="display:none;">
+    <span class="dot" id="linkDot"></span>
+    <span class="id" id="linkbarUser">—</span>
+    <span class="sep">·</span>
+    <span id="linkbarStatus">conectado</span>
+    <button class="logout" id="logoutBtn">cerrar sesión</button>
+  </div>
+
+  <div class="auth" id="authScreen">
+    <div class="brand">Nodo</div>
+    <h1>Iniciar sesión</h1>
+    <p class="sub">Solo tú y una persona más. Una sesión activa a la vez; al cerrar esta pestaña, vuelves a necesitar la contraseña.</p>
+    <div id="authMsg"></div>
+    <div id="authForm" autocomplete="off">
+      <label for="username">usuario</label>
+      <input type="text" id="username" name="user_field" autocomplete="off"
+             data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" required>
+      <label for="password">contraseña</label>
+      <input type="password" id="password" name="pwd_field" autocomplete="new-password"
+             data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" required>
+      <button type="button" class="btn" id="authSubmit">Entrar</button>
+    </div>
+  </div>
+
+  <div class="chat" id="chatScreen">
+    <div class="thread" id="thread">
+      <div class="empty-state">— sin mensajes todavía —</div>
+    </div>
+    <div class="composer">
+      <input type="text" id="messageInput" placeholder="Escribe un mensaje..." autocomplete="off" disabled>
+      <button id="sendBtn" disabled>➤</button>
+    </div>
+  </div>
+
+  <div class="kicked-overlay" id="kickedOverlay">
+    <div class="kicked-box">
+      <div class="icon">⚠️</div>
+      <h3 id="kickedTitle">Sesión cerrada</h3>
+      <p id="kickedText">Se inició sesión con este usuario desde otro dispositivo.</p>
+      <button class="btn" id="kickedOk">Entendido</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
