@@ -262,22 +262,35 @@
     }).catch(() => {});
   }
 
+  function attachmentChanged(a, b) {
+    if (!a && !b) return false;
+    if (!a || !b) return true;
+    // Ojo: NO comparamos "url" a propósito. El servidor genera una URL
+    // firmada nueva en cada sondeo (por seguridad), pero eso no significa
+    // que el archivo haya cambiado. Si comparáramos la URL, el chat
+    // pensaría que el mensaje cambió en cada sondeo y reconstruiría el
+    // HTML entero — eso es lo que causaba que las imágenes "parpadearan"
+    // y que un audio en reproducción se detuviera solo cada pocos segundos.
+    return a.kind !== b.kind || a.name !== b.name || a.mime !== b.mime || a.size !== b.size;
+  }
+
   // ---------- render de mensajes ----------
   function applyMessages(list, isInitial) {
     let changed = false;
     for (const m of list) {
       const prev = messagesById.get(m.id);
-      if (
+      const meaningfullyChanged =
         !prev ||
         prev.text !== m.text ||
         prev.editedAt !== m.editedAt ||
         prev.deliveredAt !== m.deliveredAt ||
         prev.readAt !== m.readAt ||
-        JSON.stringify(prev.attachment) !== JSON.stringify(m.attachment)
-      ) {
-        messagesById.set(m.id, m);
-        changed = true;
-      }
+        attachmentChanged(prev.attachment, m.attachment);
+      // Siempre guardamos la versión más reciente (por si hace falta la URL
+      // firmada más fresca en el próximo render real), pero eso NO fuerza
+      // un redibujado si nada relevante cambió.
+      messagesById.set(m.id, m);
+      if (meaningfullyChanged) changed = true;
       if (m.id > lastMessageId) lastMessageId = m.id;
     }
     if (isInitial || changed) renderAll();
