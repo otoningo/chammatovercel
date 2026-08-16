@@ -262,50 +262,86 @@
     }).catch(() => {});
   }
 
-  function attachmentChanged(a, b) {
-    if (!a && !b) return false;
-    if (!a || !b) return true;
-    // Ojo: NO comparamos "url" a propósito. El servidor genera una URL
-    // firmada nueva en cada sondeo (por seguridad), pero eso no significa
-    // que el archivo haya cambiado. Si comparáramos la URL, el chat
-    // pensaría que el mensaje cambió en cada sondeo y reconstruiría el
-    // HTML entero — eso es lo que causaba que las imágenes "parpadearan"
-    // y que un audio en reproducción se detuviera solo cada pocos segundos.
-    return a.kind !== b.kind || a.name !== b.name || a.mime !== b.mime || a.size !== b.size;
+  // ---------- render de mensajes: incremental, nunca destruye lo que ya existe ----------
+  // Cada mensaje se crea UNA sola vez como nodo del DOM. En sondeos
+  // posteriores, si ese mensaje ya existía, solo se actualiza su
+  // "packet-meta" (check de leído, etiqueta de editado) — nunca se toca ni
+  // recrea la imagen/audio/archivo adjunto ni el resto del nodo. Así una
+  // imagen no "parpadea" y un audio en reproducción no se detiene solo,
+  // sin importar qué tan seguido cambie la URL firmada que manda el
+  // servidor en cada sondeo.
+  let renderedNodes = new Map(); // id -> elemento DOM del <div class="packet">
+
+  function removeEmptyState() {
+    const empty = thread.querySelector('.empty-state');
+    if (empty) empty.remove();
   }
 
-  // ---------- render de mensajes ----------
-  function applyMessages(list, isInitial) {
-    let changed = false;
-    for (const m of list) {
-      const prev = messagesById.get(m.id);
-      const meaningfullyChanged =
-        !prev ||
-        prev.text !== m.text ||
-        prev.editedAt !== m.editedAt ||
-        prev.deliveredAt !== m.deliveredAt ||
-        prev.readAt !== m.readAt ||
-        attachmentChanged(prev.attachment, m.attachment);
-      // Siempre guardamos la versión más reciente (por si hace falta la URL
-      // firmada más fresca en el próximo render real), pero eso NO fuerza
-      // un redibujado si nada relevante cambió.
-      messagesById.set(m.id, m);
-      if (meaningfullyChanged) changed = true;
-      if (m.id > lastMessageId) lastMessageId = m.id;
+  function buildMetaHtml(m) {
+    return (m.editedAt ? '<span class="edited-tag">editado</span>' : '') + ticksHtml(m);
+  }
+
+  function createMessageElement(m) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = messageHtml(m);
+    const el = wrapper.firstElementChild;
+    attachHandlersForNode(el);
+    return el;
+  }
+
+  function attachHandlersForNode(el) {
+    const body = el.querySelector('.packet-body.editable');
+    if (body) body.addEventListener('click', () => startEdit(Number(body.dataset.id)));
+    const img = el.querySelector('.attachment-image');
+    if (img) img.addEventListener('click', () => window.open(img.dataset.lightbox, '_blank'));
+  }
+
+  function insertOrUpdateMessage(m) {
+    let el = renderedNodes.get(m.id);
+    if (!el) {
+      removeEmptyState();
+      el = createMessageElement(m);
+      renderedNodes.set(m.id, el);
+      thread.appendChild(el);
+      return true; // es un mensaje nuevo
     }
-    if (isInitial || changed) renderAll();
+    // Ya existía: solo tocar lo que puede cambiar (checks, "editado"), y el
+    // texto SOLO si de verdad cambió (edición) y no está en modo edición
+    // ahora mismo — nunca tocar el adjunto.
+    const metaEl = el.querySelector('.packet-meta');
+    if (metaEl) metaEl.innerHTML = buildMetaHtml(m);
+    const bodyEl = el.querySelector('.packet-body');
+    if (bodyEl && !bodyEl.querySelector('.edit-box') && bodyEl.textContent !== m.text) {
+      bodyEl.textContent = m.text;
+    }
+    return false;
   }
 
-  function renderAll() {
-    const list = Array.from(messagesById.values()).sort((a, b) => a.id - b.id);
-    if (list.length === 0) {
-      thread.innerHTML = '<div class="empty-state">— sin mensajes todavía —</div>';
+  function applyMessages(list, isInitial) {
+    if (isInitial) {
+      thread.innerHTML = '';
+      renderedNodes = new Map();
+      messagesById = new Map();
+      if (list.length === 0) {
+        thread.innerHTML = '<div class="empty-state">— sin mensajes todavía —</div>';
+      }
+      for (const m of list) {
+        messagesById.set(m.id, m);
+        insertOrUpdateMessage(m);
+        if (m.id > lastMessageId) lastMessageId = m.id;
+      }
+      thread.scrollTop = thread.scrollHeight;
       return;
     }
+
     const wasNearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 60;
-    thread.innerHTML = list.map(messageHtml).join('');
-    attachMessageHandlers();
-    if (wasNearBottom) thread.scrollTop = thread.scrollHeight;
+    let addedNew = false;
+    for (const m of list) {
+      messagesById.set(m.id, m);
+      if (insertOrUpdateMessage(m)) addedNew = true;
+      if (m.id > lastMessageId) lastMessageId = m.id;
+    }
+    if (addedNew && wasNearBottom) thread.scrollTop = thread.scrollHeight;
   }
 
   function ticksHtml(m) {
@@ -356,21 +392,9 @@
       (m.text
         ? '<div class="packet-body' + (bodyEditable ? ' editable' : '') + '" data-id="' + m.id + '">' + escapeHtml(m.text) + '</div>'
         : '') +
-      '<div class="packet-meta">' +
-      (m.editedAt ? '<span class="edited-tag">editado</span>' : '') +
-      ticksHtml(m) +
-      '</div>' +
+      '<div class="packet-meta">' + buildMetaHtml(m) + '</div>' +
       '</div>'
     );
-  }
-
-  function attachMessageHandlers() {
-    thread.querySelectorAll('.packet-body.editable').forEach((el) => {
-      el.addEventListener('click', () => startEdit(Number(el.dataset.id)));
-    });
-    thread.querySelectorAll('.attachment-image').forEach((el) => {
-      el.addEventListener('click', () => window.open(el.dataset.lightbox, '_blank'));
-    });
   }
 
   // ---------- editar mensaje propio ----------
@@ -395,7 +419,7 @@
     input.setSelectionRange(input.value.length, input.value.length);
 
     function cancel() {
-      renderAll();
+      packet.textContent = original; // solo restaura el texto, no toca el resto del mensaje
     }
     saveBtn.addEventListener('click', () => submitEdit(id, input.value));
     cancelBtn.addEventListener('click', cancel);
@@ -408,6 +432,7 @@
   async function submitEdit(id, newText) {
     const clean = newText.trim();
     if (!clean) return;
+    const packet = thread.querySelector('.packet[data-id="' + id + '"] .packet-body');
     try {
       const res = await fetch('/api/messages', {
         method: 'PATCH',
@@ -419,14 +444,16 @@
         return;
       }
       if (!res.ok) {
-        renderAll();
+        if (packet) packet.textContent = messagesById.get(id).text; // revertir a lo que había
         return;
       }
       const updated = await res.json();
       messagesById.set(updated.id, updated);
-      renderAll();
+      if (packet) packet.textContent = updated.text;
+      const metaEl = thread.querySelector('.packet[data-id="' + id + '"] .packet-meta');
+      if (metaEl) metaEl.innerHTML = buildMetaHtml(updated);
     } catch (err) {
-      renderAll();
+      if (packet) packet.textContent = messagesById.get(id).text;
     }
   }
 
@@ -450,7 +477,8 @@
       const msg = await res.json();
       messagesById.set(msg.id, msg);
       if (msg.id > lastMessageId) lastMessageId = msg.id;
-      renderAll();
+      insertOrUpdateMessage(msg);
+      thread.scrollTop = thread.scrollHeight;
     } catch (err) {
       messageInput.placeholder = 'No se pudo enviar. Intenta de nuevo.';
     }
@@ -539,7 +567,8 @@
       const msg = await res.json();
       messagesById.set(msg.id, msg);
       if (msg.id > lastMessageId) lastMessageId = msg.id;
-      renderAll();
+      insertOrUpdateMessage(msg);
+      thread.scrollTop = thread.scrollHeight;
     } catch (err) {
       alert('No se pudo enviar el archivo. Intenta de nuevo.');
     }
