@@ -10,6 +10,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
@@ -44,8 +45,37 @@
     </div>
     <div class="typing-indicator" id="typingIndicator" style="display:none;">escribiendo…</div>
     <div class="composer">
+      <input type="file" id="fileInput" style="display:none;" accept="image/*,audio/*,.pdf,.doc,.docx,.zip,.txt">
+      <button type="button" class="icon-btn" id="attachBtn" title="Adjuntar archivo">📎</button>
+      <button type="button" class="icon-btn" id="voiceBtn" title="Nota de voz">🎙️</button>
+      <button type="button" class="icon-btn" id="callBtn" title="Llamar">📞</button>
       <input type="text" id="messageInput" placeholder="Escribe un mensaje..." autocomplete="off" disabled>
       <button id="sendBtn" disabled>➤</button>
+    </div>
+    <div class="upload-progress" id="uploadProgress" style="display:none;">Subiendo…</div>
+  </div>
+
+  <div class="call-overlay" id="callOverlay" style="display:none;">
+    <div class="call-box">
+      <div class="call-status" id="callStatus">Llamando…</div>
+      <video id="remoteVideo" autoplay playsinline class="remote-video"></video>
+      <video id="localVideo" autoplay playsinline muted class="local-video"></video>
+      <div class="call-controls">
+        <button class="call-btn mute" id="muteBtn" title="Silenciar micrófono">🎤</button>
+        <button class="call-btn cam" id="camBtn" title="Cámara">📷</button>
+        <button class="call-btn hangup" id="hangupBtn" title="Colgar">✕</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="incoming-call" id="incomingCall" style="display:none;">
+    <div class="incoming-box">
+      <div class="icon">📞</div>
+      <p id="incomingText">Llamada entrante</p>
+      <div class="incoming-actions">
+        <button class="call-btn accept" id="acceptCallBtn">Contestar</button>
+        <button class="call-btn hangup" id="rejectCallBtn">Rechazar</button>
+      </div>
     </div>
   </div>
 

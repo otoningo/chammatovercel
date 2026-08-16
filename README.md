@@ -180,3 +180,70 @@ proyecto grande por separado:
 Si quieres seguir con alguno de estos, dímelo y lo armamos como el
 siguiente paso.
 
+## 9. Actualización: imágenes, archivos, notas de voz y llamadas
+
+Si ya tenías el proyecto desplegado, hace falta un poco de configuración
+nueva antes de subir este código:
+
+### 9.1. Migración de base de datos
+
+En Supabase → SQL Editor → pega el contenido de
+`sql/migration_3_attachments_calls.sql` → **Run**. Esto:
+- Agrega la columna de adjuntos a `messages`.
+- Crea el bucket de Storage `attachments` (privado).
+- Crea la tabla `call_signals` para la señalización de llamadas.
+
+Si por alguna razón el bucket no aparece en **Storage** después de correr
+la migración (a veces Supabase prefiere que se cree desde el dashboard),
+créalo a mano: **Storage → New bucket**, nómbralo `attachments`, y déjalo
+**sin marcar** "Public bucket".
+
+### 9.2. Una variable de entorno nueva
+
+Necesitas agregar `SUPABASE_PUBLISHABLE_KEY` (la clave "publishable" que
+viste en Settings → API — la del apartado de arriba, no la secreta) tanto
+en Vercel como en tu `.env` local. Es segura de exponer al navegador: el
+cliente la usa solo para subir archivos, y cada subida además requiere un
+token firmado de un solo uso que genera nuestro backend ya autenticado —
+sin ese token, esta clave no permite subir ni leer nada.
+
+### 9.3. Subir el código y redesplegar
+
+Reemplaza todos los archivos con los de esta carpeta y vuelve a desplegar
+en Vercel, como las veces anteriores.
+
+### Qué se agregó
+
+- **Imágenes y archivos**: botón 📎 en el chat. Sube directo del navegador
+  a Supabase Storage (no pasa por el límite de tamaño de las funciones de
+  Vercel), y el chat muestra miniatura para imágenes o una tarjeta de
+  descarga para el resto.
+- **Notas de voz**: botón 🎙️, graba con el micrófono del navegador
+  (`MediaRecorder`), se sube igual que un archivo y se reproduce inline
+  con controles de audio.
+- **Llamadas de audio/video**: botón 📞. Usa WebRTC de verdad (la llamada
+  en sí va directo entre los dos dispositivos, no pasa por el servidor),
+  con la negociación inicial (quién llama a quién, intercambio de
+  direcciones de red) viajando por sondeo sobre la misma base de datos —
+  no hace falta un servidor de señalización aparte.
+
+### Limitaciones de las llamadas a tener en cuenta
+
+- **Solo usa STUN público** (el de Google), no hay servidor **TURN**. Eso
+  significa que si alguno de los dos está detrás de una red muy
+  restrictiva (redes corporativas, ciertos tipos de NAT), es posible que
+  la llamada no logre conectar directamente. Para la mayoría de redes
+  domésticas y de datos móviles debería funcionar bien. Si te pasa,
+  avísame y agregamos un TURN gratuito de terceros como siguiente paso.
+- **La negociación viaja por sondeo** (cada ~2 segundos), así que
+  establecer la llamada puede tardar unos segundos más que en apps
+  comerciales — una vez conectada, el audio/video ya no depende de eso.
+- Sin pruebas automatizadas de extremo a extremo para esta parte (WebRTC y
+  grabación de audio necesitan un navegador real, no se pueden simular
+  desde este entorno) — sí quedaron probadas con una batería de pruebas la
+  lógica del servidor (subida de adjuntos, permisos, señalización). Te
+  recomiendo probar primero con algo simple —mandar una foto, y una
+  llamada corta entre dos dispositivos reales— antes de darlo por
+  completamente estable.
+
+

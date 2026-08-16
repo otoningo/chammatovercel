@@ -2,11 +2,16 @@
   const SESSION_KEY = 'nodo_session';
   const POLL_INTERVAL_MS = 2500;
   const POLL_MAX_BACKOFF_MS = 12000;
+  const CALL_POLL_INTERVAL_MS = 2000;
   const TYPING_SEND_THROTTLE_MS = 2000;
   const TYPING_STOP_AFTER_MS = 3000;
+  const RTC_CONFIG = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }],
+  };
 
   let currentUser = null;
   let currentToken = null;
+  let otherUsername = null;
   let pollTimer = null;
   let pollBackoff = POLL_INTERVAL_MS;
   let consecutiveFailures = 0;
@@ -14,6 +19,18 @@
   let messagesById = new Map();
   let lastTypingSentAt = 0;
   let typingStopTimer = null;
+  let uploadConfig = null;
+
+  // --- estado de llamada ---
+  let callPollTimer = null;
+  let lastSignalId = 0;
+  let pc = null;
+  let localStream = null;
+  let callState = 'idle'; // idle | calling | ringing | connected
+  let pendingOffer = null;
+  let pendingCandidates = [];
+  let micOn = true;
+  let camOn = true;
 
   const authScreen = document.getElementById('authScreen');
   const chatScreen = document.getElementById('chatScreen');
@@ -32,6 +49,23 @@
   const kickedOverlay = document.getElementById('kickedOverlay');
   const kickedText = document.getElementById('kickedText');
   const kickedOk = document.getElementById('kickedOk');
+  const fileInput = document.getElementById('fileInput');
+  const attachBtn = document.getElementById('attachBtn');
+  const voiceBtn = document.getElementById('voiceBtn');
+  const callBtn = document.getElementById('callBtn');
+  const uploadProgress = document.getElementById('uploadProgress');
+
+  const callOverlay = document.getElementById('callOverlay');
+  const callStatus = document.getElementById('callStatus');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const localVideo = document.getElementById('localVideo');
+  const muteBtn = document.getElementById('muteBtn');
+  const camBtn = document.getElementById('camBtn');
+  const hangupBtn = document.getElementById('hangupBtn');
+  const incomingCall = document.getElementById('incomingCall');
+  const incomingText = document.getElementById('incomingText');
+  const acceptCallBtn = document.getElementById('acceptCallBtn');
+  const rejectCallBtn = document.getElementById('rejectCallBtn');
 
   // Nombre aleatorio en el campo de contraseña en cada carga: dificulta que
   // un gestor de contraseñas lo reconozca como un login para ofrecer
@@ -122,6 +156,8 @@
     await pollMessages(true);
     schedulePoll();
     setupPush();
+    fetchUploadConfig();
+    startCallPolling();
   }
 
   function schedulePoll() {
@@ -166,9 +202,7 @@
     consecutiveFailures += 1;
     linkDot.classList.add('off');
     pollBackoff = Math.min(pollBackoff * 1.6, POLL_MAX_BACKOFF_MS);
-    if (consecutiveFailures >= 3) {
-      showConnErrorBanner();
-    }
+    if (consecutiveFailures >= 3) showConnErrorBanner();
   }
 
   function showConnErrorBanner() {
@@ -194,11 +228,9 @@
       typingIndicator.style.display = 'none';
       return;
     }
-    if (presence.typing) {
-      typingIndicator.style.display = 'block';
-    } else {
-      typingIndicator.style.display = 'none';
-    }
+    otherUsername = presence.username;
+    typingIndicator.style.display = presence.typing ? 'block' : 'none';
+
     if (presence.online) {
       linkbarStatus.innerHTML = '@' + escapeHtml(presence.username) + ' <span class="presence-online">en línea</span>';
     } else if (presence.lastSeen) {
@@ -217,7 +249,7 @@
     }
   }
 
-  // ---------- leído: si la pestaña está enfocada, marca lo que llegó como leído ----------
+  // ---------- leído ----------
   function maybeMarkRead(list) {
     if (!document.hasFocus()) return;
     const fromOther = list.filter((m) => m.from !== currentUser && !m.readAt);
@@ -235,15 +267,20 @@
     let changed = false;
     for (const m of list) {
       const prev = messagesById.get(m.id);
-      if (!prev || prev.text !== m.text || prev.editedAt !== m.editedAt || prev.deliveredAt !== m.deliveredAt || prev.readAt !== m.readAt) {
+      if (
+        !prev ||
+        prev.text !== m.text ||
+        prev.editedAt !== m.editedAt ||
+        prev.deliveredAt !== m.deliveredAt ||
+        prev.readAt !== m.readAt ||
+        JSON.stringify(prev.attachment) !== JSON.stringify(m.attachment)
+      ) {
         messagesById.set(m.id, m);
         changed = true;
       }
       if (m.id > lastMessageId) lastMessageId = m.id;
     }
-    if (isInitial || changed) {
-      renderAll();
-    }
+    if (isInitial || changed) renderAll();
   }
 
   function renderAll() {
@@ -272,13 +309,40 @@
     return '<span class="ticks ' + cls + '">' + icon + '</span>';
   }
 
+  function humanFileSize(bytes) {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function attachmentHtml(a) {
+    if (!a || !a.url) return '';
+    if (a.kind === 'image') {
+      return '<img class="attachment-image" src="' + a.url + '" alt="' + escapeHtml(a.name) + '" data-lightbox="' + a.url + '">';
+    }
+    if (a.kind === 'audio') {
+      return '<audio class="attachment-audio" controls src="' + a.url + '"></audio>';
+    }
+    return (
+      '<a class="attachment-file" href="' + a.url + '" target="_blank" rel="noopener">' +
+      '<span class="file-icon">📄</span>' +
+      '<span><div>' + escapeHtml(a.name) + '</div><div class="file-meta">' + humanFileSize(a.size) + '</div></span>' +
+      '</a>'
+    );
+  }
+
   function messageHtml(m) {
     const mine = m.from === currentUser;
     const time = new Date(m.ts).toLocaleTimeString('es-DO', { hour: '2-digit', minute: '2-digit' });
+    const bodyEditable = mine && !m.attachment; // los mensajes con adjunto no se editan, solo texto
     return (
       '<div class="packet ' + (mine ? 'mine' : '') + '" data-id="' + m.id + '">' +
       '<div class="packet-head"><span class="uid">@' + escapeHtml(m.from) + '</span><span>' + time + '</span></div>' +
-      '<div class="packet-body' + (mine ? ' editable' : '') + '" data-id="' + m.id + '">' + escapeHtml(m.text) + '</div>' +
+      attachmentHtml(m.attachment) +
+      (m.text
+        ? '<div class="packet-body' + (bodyEditable ? ' editable' : '') + '" data-id="' + m.id + '">' + escapeHtml(m.text) + '</div>'
+        : '') +
       '<div class="packet-meta">' +
       (m.editedAt ? '<span class="edited-tag">editado</span>' : '') +
       ticksHtml(m) +
@@ -291,11 +355,14 @@
     thread.querySelectorAll('.packet-body.editable').forEach((el) => {
       el.addEventListener('click', () => startEdit(Number(el.dataset.id)));
     });
+    thread.querySelectorAll('.attachment-image').forEach((el) => {
+      el.addEventListener('click', () => window.open(el.dataset.lightbox, '_blank'));
+    });
   }
 
   // ---------- editar mensaje propio ----------
   function startEdit(id) {
-    if (thread.querySelector('.edit-box')) return; // ya hay una edición en curso
+    if (thread.querySelector('.edit-box')) return;
     const m = messagesById.get(id);
     if (!m || m.from !== currentUser) return;
     const packet = thread.querySelector('.packet[data-id="' + id + '"] .packet-body');
@@ -350,7 +417,7 @@
     }
   }
 
-  // ---------- enviar ----------
+  // ---------- enviar texto ----------
   async function sendMessage() {
     const text = messageInput.value.trim();
     if (!text) return;
@@ -400,11 +467,123 @@
     typingStopTimer = setTimeout(() => sendTyping(false), TYPING_STOP_AFTER_MS);
   });
 
+  // ---------- adjuntos: archivos e imágenes ----------
+  async function fetchUploadConfig() {
+    try {
+      const res = await fetch('/api/config');
+      uploadConfig = await res.json();
+    } catch (err) {
+      uploadConfig = null;
+    }
+  }
+
+  function showUploadProgress(show, label) {
+    uploadProgress.style.display = show ? 'block' : 'none';
+    if (label) uploadProgress.textContent = label;
+  }
+
+  async function uploadAndSend(file, kind) {
+    if (!uploadConfig || !uploadConfig.supabaseUrl || !uploadConfig.supabaseAnonKey) {
+      alert('El envío de archivos no está configurado todavía en el servidor (faltan variables de Supabase).');
+      return;
+    }
+    if (!window.supabase || !window.supabase.createClient) {
+      alert('No se pudo cargar la librería necesaria para subir archivos.');
+      return;
+    }
+    showUploadProgress(true, 'Subiendo…');
+    try {
+      const signRes = await fetch('/api/upload-url', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ fileName: file.name || 'archivo' }),
+      });
+      if (signRes.status === 401) {
+        forceLogout('Se inició sesión con este usuario desde otro dispositivo, o tu sesión expiró.');
+        return;
+      }
+      if (!signRes.ok) throw new Error('no se pudo preparar la subida');
+      const { path, uploadToken } = await signRes.json();
+
+      const publicClient = window.supabase.createClient(uploadConfig.supabaseUrl, uploadConfig.supabaseAnonKey);
+      const { error: upErr } = await publicClient.storage
+        .from(uploadConfig.bucket)
+        .uploadToSignedUrl(path, uploadToken, file, { contentType: file.type || 'application/octet-stream' });
+      if (upErr) throw upErr;
+
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          text: '',
+          attachment: { path, kind, name: file.name || 'archivo', mime: file.type || '', size: file.size || 0 },
+        }),
+      });
+      if (res.status === 401) {
+        forceLogout('Se inició sesión con este usuario desde otro dispositivo, o tu sesión expiró.');
+        return;
+      }
+      const msg = await res.json();
+      messagesById.set(msg.id, msg);
+      if (msg.id > lastMessageId) lastMessageId = msg.id;
+      renderAll();
+    } catch (err) {
+      alert('No se pudo enviar el archivo. Intenta de nuevo.');
+    }
+    showUploadProgress(false);
+  }
+
+  attachBtn.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const kind = file.type.startsWith('image/') ? 'image' : 'file';
+    uploadAndSend(file, kind);
+    fileInput.value = '';
+  });
+
+  // ---------- nota de voz ----------
+  let mediaRecorder = null;
+  let recordedChunks = [];
+  let recordingStream = null;
+
+  voiceBtn.addEventListener('click', async () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      mediaRecorder.stop();
+      return;
+    }
+    try {
+      recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      alert('No se pudo acceder al micrófono.');
+      return;
+    }
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(recordingStream);
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) recordedChunks.push(e.data);
+    };
+    mediaRecorder.onstop = () => {
+      recordingStream.getTracks().forEach((t) => t.stop());
+      voiceBtn.classList.remove('recording');
+      voiceBtn.textContent = '🎙️';
+      const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      if (blob.size === 0) return;
+      const file = new File([blob], 'nota-de-voz.webm', { type: blob.type });
+      uploadAndSend(file, 'audio');
+    };
+    mediaRecorder.start();
+    voiceBtn.classList.add('recording');
+    voiceBtn.textContent = '⏹️';
+  });
+
   // ---------- cierre de sesión forzado (expulsado) ----------
   function forceLogout(reason) {
     clearSession();
     if (pollTimer) clearTimeout(pollTimer);
     pollTimer = null;
+    stopCallPolling();
+    endCall(true);
     currentUser = null;
     currentToken = null;
     linkbar.style.display = 'none';
@@ -423,6 +602,8 @@
   // ---------- cierre de sesión manual ----------
   logoutBtn.addEventListener('click', async () => {
     sendTyping(false);
+    endCall(true);
+    stopCallPolling();
     try {
       await fetch('/api/logout', {
         method: 'POST',
@@ -446,7 +627,7 @@
     clearMsg();
   });
 
-  // ---------- notificaciones push (funcionan con la app cerrada) ----------
+  // ---------- notificaciones push ----------
   async function setupPush() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
     try {
@@ -456,17 +637,12 @@
       if (!key) return;
 
       let permission = Notification.permission;
-      if (permission === 'default') {
-        permission = await Notification.requestPermission();
-      }
+      if (permission === 'default') permission = await Notification.requestPermission();
       if (permission !== 'granted') return;
 
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(key),
-        });
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
       }
       await fetch('/api/subscribe', {
         method: 'POST',
@@ -483,15 +659,218 @@
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = atob(base64);
     const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
     return outputArray;
   }
 
-  // marcar leído también cuando la pestaña recupera el foco, sin esperar al próximo sondeo
   window.addEventListener('focus', () => {
     if (currentUser) maybeMarkRead(Array.from(messagesById.values()));
+  });
+
+  // ================== LLAMADAS (WebRTC, señalización por sondeo) ==================
+
+  function startCallPolling() {
+    if (callPollTimer) clearInterval(callPollTimer);
+    callPollTimer = setInterval(pollCallSignals, CALL_POLL_INTERVAL_MS);
+  }
+  function stopCallPolling() {
+    if (callPollTimer) clearInterval(callPollTimer);
+    callPollTimer = null;
+  }
+
+  async function pollCallSignals() {
+    if (!currentUser) return;
+    try {
+      const res = await fetch('/api/call-signal?sinceId=' + lastSignalId, { headers: authHeaders() });
+      if (!res.ok) return;
+      const { signals } = await res.json();
+      for (const sig of signals || []) {
+        if (sig.id > lastSignalId) lastSignalId = sig.id;
+        await handleSignal(sig);
+      }
+    } catch (err) {}
+  }
+
+  async function sendSignal(type, payload) {
+    if (!otherUsername) return;
+    try {
+      await fetch('/api/call-signal', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ type, payload, toUser: otherUsername }),
+      });
+    } catch (err) {}
+  }
+
+  async function handleSignal(sig) {
+    if (sig.type === 'offer') {
+      if (callState !== 'idle') {
+        // ya estamos en una llamada: rechazar automáticamente la nueva
+        sendSignal('hangup', null);
+        return;
+      }
+      pendingOffer = sig;
+      callState = 'ringing';
+      incomingText.textContent = '@' + sig.from + ' te está llamando';
+      incomingCall.style.display = 'flex';
+      return;
+    }
+    if (sig.type === 'answer') {
+      if (pc && callState === 'calling') {
+        await pc.setRemoteDescription(new RTCSessionDescription(sig.payload));
+        await flushPendingCandidates();
+        callState = 'connected';
+        callStatus.textContent = 'En llamada';
+      }
+      return;
+    }
+    if (sig.type === 'candidate') {
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(sig.payload));
+        } catch (err) {}
+      } else {
+        pendingCandidates.push(sig.payload);
+      }
+      return;
+    }
+    if (sig.type === 'hangup') {
+      if (callState !== 'idle') endCall(false);
+      incomingCall.style.display = 'none';
+      pendingOffer = null;
+      return;
+    }
+  }
+
+  async function flushPendingCandidates() {
+    for (const c of pendingCandidates) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch (err) {}
+    }
+    pendingCandidates = [];
+  }
+
+  function createPeerConnection() {
+    const conn = new RTCPeerConnection(RTC_CONFIG);
+    conn.onicecandidate = (e) => {
+      if (e.candidate) sendSignal('candidate', e.candidate.toJSON());
+    };
+    conn.ontrack = (e) => {
+      remoteVideo.srcObject = e.streams[0];
+    };
+    conn.onconnectionstatechange = () => {
+      if (['disconnected', 'failed', 'closed'].includes(conn.connectionState) && callState !== 'idle') {
+        endCall(true);
+      }
+    };
+    return conn;
+  }
+
+  async function startCall() {
+    if (!otherUsername) {
+      alert('Todavía no se detecta a la otra persona (espera a que inicie sesión al menos una vez).');
+      return;
+    }
+    if (callState !== 'idle') return;
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    } catch (err) {
+      alert('No se pudo acceder a la cámara/micrófono.');
+      return;
+    }
+    localVideo.srcObject = localStream;
+    pc = createPeerConnection();
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    callState = 'calling';
+    callStatus.textContent = 'Llamando…';
+    callOverlay.style.display = 'flex';
+    sendSignal('offer', offer);
+  }
+  callBtn.addEventListener('click', startCall);
+
+  async function acceptCall() {
+    if (!pendingOffer) return;
+    const from = pendingOffer.from;
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    } catch (err) {
+      alert('No se pudo acceder a la cámara/micrófono.');
+      sendSignal('hangup', null);
+      pendingOffer = null;
+      incomingCall.style.display = 'none';
+      callState = 'idle';
+      return;
+    }
+    incomingCall.style.display = 'none';
+    localVideo.srcObject = localStream;
+    pc = createPeerConnection();
+    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+    await pc.setRemoteDescription(new RTCSessionDescription(pendingOffer.payload));
+    await flushPendingCandidates();
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    otherUsername = from; // por si acaso, aseguramos a quién responderle
+    sendSignal('answer', answer);
+
+    callState = 'connected';
+    callStatus.textContent = 'En llamada';
+    callOverlay.style.display = 'flex';
+    pendingOffer = null;
+  }
+  acceptCallBtn.addEventListener('click', acceptCall);
+
+  rejectCallBtn.addEventListener('click', () => {
+    if (pendingOffer) {
+      otherUsername = pendingOffer.from;
+      sendSignal('hangup', null);
+    }
+    pendingOffer = null;
+    incomingCall.style.display = 'none';
+    callState = 'idle';
+  });
+
+  function endCall(notifyRemote) {
+    if (callState === 'idle' && !pc && !localStream) return;
+    if (notifyRemote && callState !== 'idle') sendSignal('hangup', null);
+    if (pc) {
+      pc.close();
+      pc = null;
+    }
+    if (localStream) {
+      localStream.getTracks().forEach((t) => t.stop());
+      localStream = null;
+    }
+    remoteVideo.srcObject = null;
+    localVideo.srcObject = null;
+    callOverlay.style.display = 'none';
+    incomingCall.style.display = 'none';
+    pendingOffer = null;
+    pendingCandidates = [];
+    callState = 'idle';
+    micOn = true;
+    camOn = true;
+    muteBtn.classList.remove('off');
+    camBtn.classList.remove('off');
+  }
+  hangupBtn.addEventListener('click', () => endCall(true));
+
+  muteBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    micOn = !micOn;
+    localStream.getAudioTracks().forEach((t) => (t.enabled = micOn));
+    muteBtn.classList.toggle('off', !micOn);
+  });
+  camBtn.addEventListener('click', () => {
+    if (!localStream) return;
+    camOn = !camOn;
+    localStream.getVideoTracks().forEach((t) => (t.enabled = camOn));
+    camBtn.classList.toggle('off', !camOn);
   });
 
   // ---------- restaurar sesión si la pestaña se refrescó (no si se cerró) ----------
