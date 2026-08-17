@@ -2,93 +2,94 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Nodo — mensajería</title>
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#0B1220">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>otoningo.dev</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B1220;
+    --surface:#121B2E;
+    --text:#E6EDF3;
+    --muted:#8B98A8;
+    --accent:#4FD1C5;
+    --border:#22304A;
+    --mono:'JetBrains Mono', monospace;
+    --sans:'Inter', sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;margin:0;}
+  body{
+    background:
+      radial-gradient(ellipse at top left, rgba(79,209,197,0.06), transparent 50%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    display:flex;
+    flex-direction:column;
+    min-height:100vh;
+  }
+  header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding:20px 28px;
+  }
+  .brand{
+    font-family:var(--mono);
+    font-size:13px;
+    letter-spacing:0.1em;
+    color:var(--accent);
+  }
+  nav a{
+    font-family:var(--mono);
+    font-size:13px;
+    color:var(--muted);
+    text-decoration:none;
+    border:1px solid var(--border);
+    padding:7px 14px;
+    border-radius:8px;
+    transition:border-color .15s, color .15s;
+  }
+  nav a:hover{border-color:var(--accent);color:var(--accent);}
+  main{
+    flex:1;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    align-items:flex-start;
+    max-width:560px;
+    padding:20px 28px 60px;
+  }
+  h1{
+    font-size:clamp(28px, 5vw, 40px);
+    line-height:1.25;
+    margin:0 0 16px;
+  }
+  p{
+    color:var(--muted);
+    font-size:15px;
+    line-height:1.6;
+    margin:0;
+  }
+  footer{
+    padding:20px 28px;
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--muted);
+  }
+</style>
 </head>
 <body>
-
-<div class="app" id="app">
-  <div class="linkbar" id="linkbar" style="display:none;">
-    <span class="dot" id="linkDot"></span>
-    <span class="id" id="linkbarUser">—</span>
-    <span class="sep">·</span>
-    <span id="linkbarStatus">conectado</span>
-    <button class="logout" id="logoutBtn">cerrar sesión</button>
-  </div>
-
-  <div class="auth" id="authScreen">
-    <div class="brand">Nodo</div>
-    <h1>Iniciar sesión</h1>
-    <p class="sub">Solo tú y una persona más. Una sesión activa a la vez; al cerrar esta pestaña, vuelves a necesitar la contraseña.</p>
-    <div id="authMsg"></div>
-    <div id="authForm" autocomplete="off">
-      <label for="username">usuario</label>
-      <input type="text" id="username" name="user_field" autocomplete="off"
-             data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" required>
-      <label for="password">contraseña</label>
-      <input type="password" id="password" name="pwd_field" autocomplete="new-password"
-             data-lpignore="true" data-1p-ignore data-bwignore data-form-type="other" required>
-      <button type="button" class="btn" id="authSubmit">Entrar</button>
-    </div>
-  </div>
-
-  <div class="chat" id="chatScreen">
-    <div class="thread" id="thread">
-      <div class="empty-state">— sin mensajes todavía —</div>
-    </div>
-    <div class="typing-indicator" id="typingIndicator" style="display:none;">escribiendo…</div>
-    <div class="composer">
-      <input type="file" id="fileInput" style="display:none;" accept="image/*,audio/*,.pdf,.doc,.docx,.zip,.txt">
-      <button type="button" class="icon-btn" id="attachBtn" title="Adjuntar archivo">📎</button>
-      <button type="button" class="icon-btn" id="voiceBtn" title="Nota de voz">🎙️</button>
-      <button type="button" class="icon-btn" id="callBtn" title="Llamar">📞</button>
-      <input type="text" id="messageInput" placeholder="Escribe un mensaje..." autocomplete="off" disabled>
-      <button id="sendBtn" disabled>➤</button>
-    </div>
-    <div class="upload-progress" id="uploadProgress" style="display:none;">Subiendo…</div>
-  </div>
-
-  <div class="call-overlay" id="callOverlay" style="display:none;">
-    <div class="call-box">
-      <div class="call-status" id="callStatus">Llamando…</div>
-      <video id="remoteVideo" autoplay playsinline class="remote-video"></video>
-      <video id="localVideo" autoplay playsinline muted class="local-video"></video>
-      <div class="call-controls">
-        <button class="call-btn mute" id="muteBtn" title="Silenciar micrófono">🎤</button>
-        <button class="call-btn cam" id="camBtn" title="Cámara">📷</button>
-        <button class="call-btn hangup" id="hangupBtn" title="Colgar">✕</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="incoming-call" id="incomingCall" style="display:none;">
-    <div class="incoming-box">
-      <div class="icon">📞</div>
-      <p id="incomingText">Llamada entrante</p>
-      <div class="incoming-actions">
-        <button class="call-btn accept" id="acceptCallBtn">Contestar</button>
-        <button class="call-btn hangup" id="rejectCallBtn">Rechazar</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="kicked-overlay" id="kickedOverlay">
-    <div class="kicked-box">
-      <div class="icon">⚠️</div>
-      <h3 id="kickedTitle">Sesión cerrada</h3>
-      <p id="kickedText">Se inició sesión con este usuario desde otro dispositivo.</p>
-      <button class="btn" id="kickedOk">Entendido</button>
-    </div>
-  </div>
-</div>
-
-<script src="/app.js"></script>
+  <header>
+    <span class="brand">◆ otoningo.dev</span>
+    <nav><a href="/chat">Entrar</a></nav>
+  </header>
+  <main>
+    <h1>Sitio personal en construcción.</h1>
+    <p>Por ahora no hay mucho que ver aquí — vuelve pronto.</p>
+  </main>
+  <footer>&copy; 2026</footer>
 </body>
 </html>

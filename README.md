@@ -18,6 +18,26 @@ La sesión única, el cierre automático al salir, y las notificaciones push
 genéricas funcionan igual de estrictos que en la versión de servidor
 propio — solo cambia el mecanismo por debajo.
 
+## Estructura del sitio
+
+El dominio tiene dos partes separadas:
+
+- **`/`** — una página de inicio neutral, sin login ni formularios (solo
+  contenido estático). El código está en `index.html` (raíz del proyecto).
+  Cámbiala por lo que quieras mostrar ahí — es HTML/CSS plano, sin lógica.
+- **`/chat`** — la aplicación de mensajería real (login de verdad, sin
+  atajos ni señuelos). Todo su código vive en la carpeta `chat/`.
+
+Ambas comparten el mismo backend en `/api/*` — las funciones no cambiaron
+de lugar ni de comportamiento, solo cambió dónde vive el frontend que las
+llama.
+
+Si vienes de una versión anterior donde `index.html`, `app.js`, `styles.css`,
+etc. estaban sueltos en la raíz del proyecto: ahora esos mismos archivos
+viven dentro de `chat/`, y hay una `index.html` nueva en la raíz que antes
+no existía (la página de inicio). Sube el proyecto completo, no solo los
+archivos sueltos, para que la estructura de carpetas quede bien en Vercel.
+
 ## 1. Crear el proyecto en Supabase
 
 1. Entra a [supabase.com](https://supabase.com), crea una cuenta y un
