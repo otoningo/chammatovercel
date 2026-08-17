@@ -25,8 +25,8 @@ El dominio tiene dos partes separadas:
 - **`/`** — una página de inicio neutral, sin login ni formularios (solo
   contenido estático). El código está en `index.html` (raíz del proyecto).
   Cámbiala por lo que quieras mostrar ahí — es HTML/CSS plano, sin lógica.
-- **`/chat`** — la aplicación de mensajería real (login de verdad, sin
-  atajos ni señuelos). Todo su código vive en la carpeta `chat/`.
+- **`/conocenos`** — la aplicación de mensajería real (login de verdad, sin
+  atajos ni señuelos). Todo su código vive en la carpeta `conocenos/`.
 
 Ambas comparten el mismo backend en `/api/*` — las funciones no cambiaron
 de lugar ni de comportamiento, solo cambió dónde vive el frontend que las
