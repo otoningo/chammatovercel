@@ -3,14 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>inglatam</title>
+<title>inglatam — Noticiero de Ingeniería en LATAM</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg:#0B1220;
     --surface:#121B2E;
+    --surface-hover:#1A263E;
     --text:#E6EDF3;
     --muted:#8B98A8;
     --accent:#4FD1C5;
@@ -35,12 +36,22 @@
     justify-content:space-between;
     align-items:center;
     padding:20px 28px;
+    border-bottom:1px solid var(--border);
+    max-width:1200px;
+    width:100%;
+    margin:0 auto;
   }
   .brand{
     font-family:var(--mono);
-    font-size:13px;
-    letter-spacing:0.1em;
+    font-size:15px;
+    font-weight:700;
+    letter-spacing:0.05em;
     color:var(--accent);
+    text-decoration:none;
+  }
+  nav{
+    display:flex;
+    gap:12px;
   }
   nav a{
     font-family:var(--mono);
@@ -52,29 +63,130 @@
     border-radius:8px;
     transition:border-color .15s, color .15s;
   }
-  nav a:hover{border-color:var(--accent);color:var(--accent);}
+  nav a:hover, nav a.active{
+    border-color:var(--accent);
+    color:var(--accent);
+  }
+  
   main{
     flex:1;
-    display:flex;
-    flex-direction:column;
-    justify-content:center;
-    align-items:flex-start;
-    max-width:560px;
-    padding:20px 28px 60px;
+    max-width:1200px;
+    width:100%;
+    margin:0 auto;
+    padding:40px 28px;
+  }
+  
+  .hero{
+    margin-bottom:48px;
+  }
+  .tag{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--accent);
+    background:rgba(79,209,197,0.1);
+    padding:4px 8px;
+    border-radius:4px;
+    display:inline-block;
+    margin-bottom:12px;
   }
   h1{
-    font-size:clamp(28px, 5vw, 40px);
-    line-height:1.25;
-    margin:0 0 16px;
+    font-size:clamp(28px, 4vw, 42px);
+    line-height:1.2;
+    margin:0 0 12px;
+    font-weight:700;
   }
-  p{
+  .hero p{
     color:var(--muted);
-    font-size:15px;
+    font-size:16px;
     line-height:1.6;
     margin:0;
+    max-width:640px;
   }
+
+  .section-title{
+    font-family:var(--mono);
+    font-size:14px;
+    color:var(--muted);
+    text-transform:uppercase;
+    letter-spacing:0.1em;
+    margin-bottom:24px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  .section-title::after{
+    content:'';
+    flex:1;
+    height:1px;
+    background:var(--border);
+  }
+
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+    gap:24px;
+  }
+
+  .card{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:24px;
+    display:flex;
+    flex-direction:column;
+    justify-content:space-between;
+    transition:transform .2s, border-color .2s;
+  }
+  .card:hover{
+    transform:translateY(-2px);
+    border-color:var(--accent);
+  }
+  .card-meta{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    font-family:var(--mono);
+    font-size:11px;
+    color:var(--muted);
+    margin-bottom:12px;
+  }
+  .card-category{
+    color:var(--accent);
+  }
+  .card h2{
+    font-size:18px;
+    line-height:1.4;
+    margin:0 0 12px;
+    color:var(--text);
+  }
+  .card p{
+    color:var(--muted);
+    font-size:14px;
+    line-height:1.5;
+    margin:0 0 20px;
+  }
+  .card-link{
+    font-family:var(--mono);
+    font-size:12px;
+    color:var(--accent);
+    text-decoration:none;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  .card-link:hover{
+    text-decoration:underline;
+  }
+
   footer{
-    padding:20px 28px;
+    border-top:1px solid var(--border);
+    padding:24px 28px;
+    max-width:1200px;
+    width:100%;
+    margin:0 auto;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
     font-family:var(--mono);
     font-size:11px;
     color:var(--muted);
@@ -83,13 +195,109 @@
 </head>
 <body>
   <header>
-    <span class="brand">◆ otoningo.dev</span>
-    <nav><a href="/chat">Entrar</a></nav>
+    <a href="#" class="brand">◆ inglatam</a>
+    <nav>
+      <a href="#" class="active">Inicio</a>
+      <a href="#">Software</a>
+      <a href="#">Civil</a>
+      <a href="#">Energía</a>
+      <a href="/chat">Entrar</a>
+    </nav>
   </header>
+
   <main>
-    <h1>Sitio personal en construcción.</h1>
-    <p>Por ahora no hay mucho que ver aquí — vuelve pronto.</p>
+    <section class="hero">
+      <span class="tag">PORTAL DE NOTICIAS</span>
+      <h1>El pulso de la ingeniería e innovación en Latinoamérica.</h1>
+      <p>Proyectos de infraestructura, desarrollo de software, transición energética e avances tecnológicos en la región.</p>
+    </section>
+
+    <div class="section-title">Últimas publicaciones</div>
+
+    <section class="grid">
+      <!-- Noticia 1 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">ENERGÍA & MINERÍA</span>
+            <span>17 AGO, 2026</span>
+          </div>
+          <h2>Chile expande su capacidad de almacenamiento en baterías para energía solar en Atacama</h2>
+          <p>Nuevos parques híbridos buscan resolver el vertimiento energético en el norte del país, integrando BESS de última generación.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+
+      <!-- Noticia 2 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">SOFTWARE & IA</span>
+            <span>15 AGO, 2026</span>
+          </div>
+          <h2>Hubs tecnológicos en Colombia y México lideran la adopción de LLMs locales</h2>
+          <p>Startups e ingenieros de la región adaptan modelos de lenguaje de código abierto para resolver problemas específicos del sector financiero y de salud.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+
+      <!-- Noticia 3 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">INFRAESTRUCTURA</span>
+            <span>12 AGO, 2026</span>
+          </div>
+          <h2>Avanza el Corredor Bioceánico: los desafíos de ingeniería civil en el Chaco paraguayo</h2>
+          <p>Análisis técnico sobre las soluciones de pavimentación y drenaje aplicadas para resistir las condiciones extremas del terreno.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+
+      <!-- Noticia 4 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">AEROESPACIAL</span>
+            <span>09 AGO, 2026</span>
+          </div>
+          <h2>Brasil lanza nuevo nanosatélite universitario para monitoreo ambiental de la Amazonía</h2>
+          <p>Desarrollado en colaboración con institutos públicos, el proyecto integra sensores multiespectrales de bajo costo fabricados localmente.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+
+      <!-- Noticia 5 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">HIDRÁULICA</span>
+            <span>05 AGO, 2026</span>
+          </div>
+          <h2>Modernización del Canal de Panamá: proyectos clave de gestión hídrica para el 2030</h2>
+          <p>Un vistazo a los planes de ingeniería hidráulica para asegurar el suministro de agua dulce frente a las variaciones climáticas.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+
+      <!-- Noticia 6 -->
+      <article class="card">
+        <div>
+          <div class="card-meta">
+            <span class="card-category">ELECTRÓNICA</span>
+            <span>01 AGO, 2026</span>
+          </div>
+          <h2>Iniciativas de semiconductores en LATAM buscan integrarse a la cadena global de suministro</h2>
+          <p>Universidades y centros de I+D en la región avanzan en el diseño y empaquetado de circuitos integrados especializados.</p>
+        </div>
+        <a href="#" class="card-link">Leer artículo completo &rarr;</a>
+      </article>
+    </section>
   </main>
-  <footer>&copy; 2026</footer>
+
+  <footer>
+    <span>&copy; 2026 inglatam</span>
+    <span>otoningo.dev</span>
+  </footer>
 </body>
 </html>
